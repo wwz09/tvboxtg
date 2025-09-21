@@ -1,0 +1,34 @@
+name: Auto-update
+
+on:
+  schedule:
+    - cron:  '0 0 * * *'  # 每天凌晨执行一次
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # 获取所有历史记录
+
+      - name: Set up Git
+        run: |
+          git config --global user.name "wwz09"
+          git config --global user.email "wwz5124@gmail.com"
+
+      - name: Add upstream remote
+        run: git remote add upstream https://github.com/ls125781003/tvboxtg.git || true
+
+      - name: Fetch upstream
+        run: git fetch upstream
+
+      - name: Merge upstream changes
+        run: |
+          git checkout main  # 切换到你要同步的分支，通常是main或master
+          git merge upstream/main  # 合并上游仓库的main分支
+
+      - name: Push changes
+        run: git push origin main  # 推送到你的Fork仓库
