@@ -25,13 +25,26 @@ jobs:
           git config --global user.name "wwz09"
           git config --global user.email "wwz5124@gmail.com"
 
+      - name: 检查上游仓库是否可达
+        run: |
+          curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git" | grep -q "200\|401" || (
+            echo "上游仓库不可达，请检查URL是否正确或网络连接"
+            exit 1
+          )
+
       - name: Add upstream remote
         run: git remote add upstream "https://github.com/ls125781003/tvboxtg.git" || echo "Upstream remote already exists"
 
       - name: Fetch upstream
-        run: git fetch upstream
+        run: git fetch upstream || (
+          echo "获取上游代码失败，尝试重新添加远程仓库..."
+          git remote remove upstream
+          git remote add upstream "https://github.com/ls125781003/tvboxtg.git"
+          git fetch upstream
+        )
 
       - name: Merge upstream changes
+        id: merge
         run: |
           git checkout main  # 切换到要同步的分支
           # 尝试合并上游更改，如果有冲突则解决冲突
@@ -40,8 +53,28 @@ jobs:
             # 使用上游版本覆盖冲突文件
             git checkout --theirs .
             git add .
-            git commit -m "自动解决上游同步冲突"
+            git commit -m "自动解决上游同步冲突 $(date)"
+            echo "冲突已解决，使用上游版本覆盖本地文件"
           )
+          echo "合并上游代码完成"
+
+      - name: 检测是否有变更
+        id: check_changes
+        run: |
+          # 检查是否有变更需要提交
+          if [[ $(git status --porcelain) ]]; then
+            echo "HAS_CHANGES=true" >> $GITHUB_ENV
+            echo "检测到代码变更，准备提交..."
+          else
+            echo "HAS_CHANGES=false" >> $GITHUB_ENV
+            echo "没有检测到代码变更，无需提交..."
+          fi
+
+      - name: 提交变更（如果有）
+        if: ${{ env.HAS_CHANGES == 'true' }}
+        run: |
+          git add .
+          git commit -m "自动同步上游仓库变更 $(date)"
 
       - name: Push changes
         run: |
@@ -49,7 +82,11 @@ jobs:
           git push origin main || (
             echo "推送失败，尝试拉取最新代码并重试..."
             git pull --rebase origin main
-            git push origin main
+            git push origin main || (
+              echo "第二次推送失败，再次尝试..."
+              git pull --rebase origin main
+              git push origin main
+            )
           )
 
       - name: 触发URL替换工作流（如果需要）
@@ -59,4 +96,12 @@ jobs:
           curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d '{"event_type":"sync_upstream"}'
+            -d '{"event_type":"sync_upstream"}' || (
+            echo "触发URL替换工作流失败，稍后尝试..."
+            # 延迟5秒后再次尝试
+            sleep 5
+            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              https://api.github.com/repos/${{ github.repository }}/dispatches \
+              -d '{"event_type":"sync_upstream"}'
+          )
