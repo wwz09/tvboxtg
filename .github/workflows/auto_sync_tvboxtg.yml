@@ -1,82 +1,107 @@
+# Workflow name: Auto-update TVBoxTG project
 name: Auto-update TVBoxTG
 
+# Trigger configuration
 on:
+  # Scheduled trigger: run every 2 hours
   schedule:
     - cron: "0 */2 * * *"
+  # Manual trigger: allow starting this workflow manually via GitHub Actions UI
   workflow_dispatch:
 
+# Permissions configuration: set permissions required for workflow execution
 permissions:
-  contents: write
-  actions: write
-  pull-requests: write
+  contents: write          # Allow read/write access to code contents
+  actions: write          # Allow operations on workflows
+  pull-requests: write    # Allow creating PRs
 
+# Jobs definition
 jobs:
-  sync:
+  # Sync job: responsible for syncing code from upstream repository
+sync:
+    # Runner environment: use latest Ubuntu system
     runs-on: ubuntu-latest
+    # Workflow steps
     steps:
+      # Step 1: Checkout code
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
-          persist-credentials: true
+          fetch-depth: 0          # Fetch complete git history
+          persist-credentials: true  # Keep credentials for subsequent git operations
 
+      # Step 2: Configure Git user information
       - name: Configure Git
         run: |
           git config --global user.name "wwz09"
           git config --global user.email "wwz5124@gmail.com"
 
+      # Step 3: Verify if upstream repository is reachable (max 3 attempts)
       - name: Verify upstream repository
         run: |
+          # Verify upstream repository URL accessibility using curl, max 3 attempts
           for i in {1..3}; do
             curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git" && break
             echo "Attempt $i failed, retrying in 1 second..."
             sleep 1
           done
+          # Check final status code, 200 means success, 401 means authentication required (but URL exists)
           curl_status=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git")
           if [[ ! $curl_status =~ ^(200|401)$ ]]; then
             echo "Upstream repository not reachable, status code: $curl_status"
             exit 1
           fi
 
+      # Step 4: Add upstream repository remote address (ignore if already exists)
       - name: Add upstream
         run: git remote add upstream "https://github.com/ls125781003/tvboxtg.git" || echo "Upstream already exists"
 
+      # Step 5: Fetch latest code from upstream repository (re-add remote and retry if failed)
       - name: Fetch from upstream
         run: git fetch upstream || echo "Fetch failed, re-adding upstream..." && git remote remove upstream && git remote add upstream "https://github.com/ls125781003/tvboxtg.git" && git fetch upstream
 
+      # Step 6: Merge upstream changes into current repository
       - name: Merge upstream changes
         id: merge
         run: |
-          git checkout main
+          git checkout main  # Ensure switching to main branch
+          # Attempt to merge upstream main branch, automatically resolve conflicts if occurred
           git merge --no-edit upstream/main || echo "Conflict detected, resolving..." && git checkout --theirs . && git add . && git commit -m "Auto resolve sync conflicts $(date)" && echo "Conflict resolved with upstream version"
           echo "Upstream merge completed"
 
+      # Step 7: Check for changes (set environment variable HAS_CHANGES)
       - name: Check for changes
         id: check_changes
         run: |
-          git status
-          changes=$(git status --porcelain)
+          git status  # Show current git status
+          changes=$(git status --porcelain)  # Get concise change status
           if [[ -n "$changes" ]]; then
             echo "Changes detected"
             echo "$changes"
-            echo "HAS_CHANGES=true" >> $GITHUB_ENV
+            echo "HAS_CHANGES=true" >> $GITHUB_ENV  # Set environment variable marking changes exist
           else
             echo "No changes detected"
-            echo "HAS_CHANGES=false" >> $GITHUB_ENV
+            echo "HAS_CHANGES=false" >> $GITHUB_ENV  # Set environment variable marking no changes
           fi
 
+      # Step 8: Commit changes (execute only when there are changes)
       - name: Commit changes
         if: ${{ env.HAS_CHANGES == 'true' }}
         run: |
-          git add .
+          git add .  # Add all changed files
+          # Attempt to commit, allow empty commit if failed
           git commit -m "Auto sync upstream changes $(date)" || echo "Commit failed, retrying with --allow-empty" && git commit -m "Auto sync upstream changes $(date)" --allow-empty
 
+      # Step 9: Push changes to remote repository (with failure retry logic)
       - name: Push changes
         run: |
+          # Attempt to push, if failed then pull and push again, max 2 retries
           git push origin main || echo "Push failed, retrying with pull..." && git pull --rebase origin main && git push origin main || echo "Second push failed, retrying again..." && git pull --rebase origin main && git push origin main
 
+      # Step 10: Trigger URL replacement workflow (execute only when there are changes)
       - name: Trigger URL replacement
         if: ${{ env.HAS_CHANGES == 'true' }}
         run: |
           echo "Triggering URL replacement workflow..."
+          # Trigger another workflow via GitHub API, with failure retry logic
           curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/${{ github.repository }}/dispatches -d '{"event_type":"sync_upstream"}' || echo "Trigger failed, retrying..." && sleep 5 && curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/${{ github.repository }}/dispatches -d '{"event_type":"sync_upstream"}' || echo "Second trigger failed, exit gracefully" && exit 0
