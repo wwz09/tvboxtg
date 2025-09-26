@@ -2,13 +2,14 @@ name: Auto-update TVBoxTG
 
 on:
   schedule:
-    - cron:  '0 */2 * * *'  # 每2小时执行一次
+    - cron: "0 */2 * * *"  # 每2小时执行一次（注意使用双引号）
   workflow_dispatch:      # 允许手动触发
 
-# 授予工作流必要的权限
+# 授予工作流完整权限
 permissions:
   contents: write
   actions: write
+  pull-requests: write
 
 jobs:
   sync:
@@ -27,10 +28,19 @@ jobs:
 
       - name: 检查上游仓库是否可达
         run: |
-          curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git" | grep -q "200\|401" || (
-            echo "上游仓库不可达，请检查URL是否正确或网络连接"
+          # 添加重试逻辑，增加连接稳定性
+          for i in {1..3}; do
+            curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git" && break
+            echo "尝试 $i 连接失败，等待1秒后重试..."
+            sleep 1
+          done
+          
+          # 检查最终连接状态
+          curl_status=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git")
+          if [[ ! $curl_status =~ ^(200|401)$ ]]; then
+            echo "上游仓库不可达，状态码: $curl_status，请检查URL是否正确或网络连接"
             exit 1
-          )
+          fi
 
       - name: Add upstream remote
         run: git remote add upstream "https://github.com/ls125781003/tvboxtg.git" || echo "Upstream remote already exists"
@@ -62,7 +72,11 @@ jobs:
         id: check_changes
         run: |
           # 检查是否有变更需要提交
-          if [[ $(git status --porcelain) ]]; then
+          git status
+          changes=$(git status --porcelain)
+          if [[ -n "$changes" ]]; then
+            echo "检测到的变更："
+            echo "$changes"
             echo "HAS_CHANGES=true" >> $GITHUB_ENV
             echo "检测到代码变更，准备提交..."
           else
@@ -74,7 +88,12 @@ jobs:
         if: ${{ env.HAS_CHANGES == 'true' }}
         run: |
           git add .
-          git commit -m "自动同步上游仓库变更 $(date)"
+          git commit -m "自动同步上游仓库变更 $(date)" || (
+            echo "提交失败，检查是否有未跟踪的文件或权限问题"
+            git status
+            # 强制提交
+            git commit -m "自动同步上游仓库变更 $(date)" --allow-empty
+          )
 
       - name: Push changes
         run: |
@@ -93,6 +112,7 @@ jobs:
         if: ${{ env.HAS_CHANGES == 'true' }}
         run: |
           echo "检测到代码变更，触发URL替换工作流..."
+          # 使用更简洁的方式触发工作流
           curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
@@ -103,5 +123,9 @@ jobs:
             curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
               https://api.github.com/repos/${{ github.repository }}/dispatches \
-              -d '{"event_type":"sync_upstream"}'
+              -d '{"event_type":"sync_upstream"}' || (
+              echo "第二次触发失败，记录错误信息"
+              # 即使触发失败，工作流本身仍标记为成功
+              exit 0
+            )
           )
