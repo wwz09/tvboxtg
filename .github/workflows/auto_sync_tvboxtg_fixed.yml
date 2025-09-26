@@ -45,9 +45,9 @@ jobs:
             echo "Attempt $i failed, retrying in 1 second..."
             sleep 1
           done
-          # Check final status code, 200 means success, 401 means authentication required (but URL exists)
+          # Check final status code, 200/301/302 means success/redirect, 401 means authentication required
           curl_status=$(curl -s -o /dev/null -w "%{http_code}" "https://github.com/ls125781003/tvboxtg.git")
-          if [[ ! $curl_status =~ ^(200|401)$ ]]; then
+          if [[ ! $curl_status =~ ^(200|301|302|401)$ ]]; then
             echo "Upstream repository not reachable, status code: $curl_status"
             exit 1
           fi
