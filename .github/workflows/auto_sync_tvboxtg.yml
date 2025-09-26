@@ -18,7 +18,7 @@ permissions:
 # Jobs definition
 jobs:
   # Sync job: responsible for syncing code from upstream repository
-sync:
+  sync:
     # Runner environment: use latest Ubuntu system
     runs-on: ubuntu-latest
     # Workflow steps
